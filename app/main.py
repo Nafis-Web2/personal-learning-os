@@ -1,6 +1,7 @@
 from datetime import datetime
-from fastapi import FastAPI,Depends,HTTPException,UploadFile,File,Form
+from fastapi import FastAPI,Depends,HTTPException,UploadFile,File,Form,Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from app.core.config import allowed_origins,is_production
 from sqlalchemy.orm import Session
 from app.db.base import Base
@@ -11,8 +12,35 @@ from app.services.mastery import record_evidence
 from app.services.reviews import update_review
 from app.services.continuity import build_context
 from app.seed.curricula import seed_all
+from app.services.supabase_auth import verify_supabase_token
 app=FastAPI(title='Personal Learning OS API',version='0.3.0')
 app.add_middleware(CORSMiddleware,allow_origins=allowed_origins(),allow_credentials=True,allow_methods=['*'],allow_headers=['*'])
+
+@app.middleware('http')
+async def protect_user_routes(request:Request,call_next):
+    if request.method=='OPTIONS':
+        return await call_next(request)
+    path=request.url.path
+    if is_production() and path.startswith('/users/'):
+        auth=request.headers.get('authorization','')
+        if not auth.lower().startswith('bearer '):
+            return JSONResponse({'detail':'Authentication required'},status_code=401)
+        try:
+            claims=verify_supabase_token(auth.split(' ',1)[1])
+        except HTTPException as e:
+            return JSONResponse({'detail':e.detail},status_code=e.status_code)
+        provider_subject=claims.get('id') or claims.get('sub')
+        from app.db.session import SessionLocal
+        db=SessionLocal()
+        try:
+            ident=db.query(AuthIdentity).filter_by(provider='supabase',provider_subject=provider_subject).first()
+            requested=path.split('/')[2] if len(path.split('/'))>2 else ''
+            if not ident or ident.user_id!=requested:
+                return JSONResponse({'detail':'Forbidden'},status_code=403)
+        finally:
+            db.close()
+    return await call_next(request)
+
 @app.on_event('startup')
 def startup():
     Base.metadata.create_all(bind=engine)
@@ -22,6 +50,24 @@ def startup():
     finally: db.close()
 @app.get('/health')
 def health(): return {'status':'ok','phase':3}
+
+@app.get('/auth/me')
+def auth_me(request:Request,db:Session=Depends(get_db)):
+    auth=request.headers.get('authorization','')
+    if not auth.lower().startswith('bearer '): raise HTTPException(401,'Authentication required')
+    claims=verify_supabase_token(auth.split(' ',1)[1])
+    subject=claims.get('id') or claims.get('sub')
+    ident=db.query(AuthIdentity).filter_by(provider='supabase',provider_subject=subject).first()
+    if ident:
+        u=db.get(User,ident.user_id)
+    else:
+        meta=claims.get('user_metadata') or {}
+        email=claims.get('email') or ''
+        display=meta.get('full_name') or meta.get('name') or (email.split('@')[0] if email else 'Learner')
+        u=User(display_name=display,timezone='America/New_York');db.add(u);db.flush()
+        db.add(AuthIdentity(user_id=u.id,provider='supabase',provider_subject=subject))
+        db.add(PrivacySetting(user_id=u.id));db.commit();db.refresh(u)
+    return {'id':u.id,'display_name':u.display_name,'timezone':u.timezone,'email':claims.get('email')}
 @app.post('/users')
 def create_user(data:UserCreate,db:Session=Depends(get_db)):
     u=User(**data.model_dump()); db.add(u); db.flush(); db.add(PrivacySetting(user_id=u.id)); db.commit(); db.refresh(u); return {'id':u.id,'display_name':u.display_name,'timezone':u.timezone}
