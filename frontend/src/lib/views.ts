@@ -1,4 +1,7 @@
-const BASE=process.env.NEXT_PUBLIC_API_URL||"http://localhost:8000";
+const BASE =
+  process.env.NEXT_PUBLIC_API_BASE_URL ||
+  process.env.NEXT_PUBLIC_API_URL ||
+  "http://localhost:8000";
 async function get(p:string){const r=await fetch(BASE+p,{cache:"no-store"});if(!r.ok)throw new Error(await r.text());return r.json()}
 export const views={
  mastery:(u:string)=>get(`/users/${u}/mastery-view`),

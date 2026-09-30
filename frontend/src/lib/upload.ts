@@ -1,4 +1,7 @@
-const BASE=process.env.NEXT_PUBLIC_API_URL||"http://localhost:8000";
+const BASE =
+  process.env.NEXT_PUBLIC_API_BASE_URL ||
+  process.env.NEXT_PUBLIC_API_URL ||
+  "http://localhost:8000";
 export async function uploadLearningFile(userId:string,file:File,meta:{assignmentId?:string;courseId?:string;title?:string}={}){
  const fd=new FormData(); fd.append("file",file);
  if(meta.assignmentId)fd.append("assignment_id",meta.assignmentId);
